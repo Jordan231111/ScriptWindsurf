@@ -255,6 +255,7 @@ import json
 import string
 import random
 import hashlib
+import tempfile
 import requests
 from faker import Faker
 from selenium import webdriver
@@ -282,6 +283,16 @@ def setup_driver(browser_type):
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-blink-features=AutomationControlled")
+        
+        # Create a unique user data directory to prevent conflicts
+        unique_user_dir = tempfile.mkdtemp()
+        options.add_argument(f"--user-data-dir={unique_user_dir}")
+        options.add_argument("--profile-directory=WindsurfAutomation")
+        
+        # Disable extensions and other settings that might cause conflicts
+        options.add_argument("--disable-extensions")
+        options.add_argument("--disable-gpu")
+        
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
         service = Service(ChromeDriverManager().install())
