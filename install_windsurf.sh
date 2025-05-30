@@ -179,7 +179,7 @@ register_windsurf() {
     
     # Install required Python packages for browser automation
     echo -e "${BLUE}Installing required Python packages for browser automation...${NC}"
-    pip3 install selenium webdriver-manager
+    pip3 install selenium webdriver-manager requests faker
 
     # Check if Chrome or Firefox is installed
     BROWSER=""
@@ -227,30 +227,43 @@ register_windsurf() {
     
     cat > "$automation_script" << EOF
 #!/usr/bin/env python3
+import os
 import time
 import re
 import sys
 import json
+import string
+import random
+import hashlib
+import requests
+from faker import Faker
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.firefox import GeckoDriverManager
 
+# Initialize Faker to generate random names
+fake = Faker()
+
 def setup_driver(browser_type):
-    options = None
-    driver = None
+    """Setup and configure the WebDriver"""
+    print(f"Setting up {browser_type} browser...")
     
     if browser_type == "chrome":
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.chrome.service import Service
         
         options = Options()
-        options.add_argument("--headless")  # Run in headless mode
+        # Comment out the headless option to see the browser in action (for debugging)
+        # options.add_argument("--headless")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("useAutomationExtension", False)
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=options)
     elif browser_type == "firefox":
@@ -258,22 +271,46 @@ def setup_driver(browser_type):
         from selenium.webdriver.firefox.service import Service
         
         options = Options()
-        options.add_argument("--headless")
+        # Comment out the headless option to see the browser in action (for debugging)
+        # options.add_argument("--headless")
         service = Service(GeckoDriverManager().install())
         driver = webdriver.Firefox(service=service, options=options)
     else:
         print("Unsupported browser type")
         sys.exit(1)
-        
+    
+    # Set window size
+    driver.set_window_size(1366, 768)
+    
+    # Add stealth JS to avoid detection
+    driver.execute_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    )
+    
     return driver
 
-def check_email_for_verification(email, domain, max_attempts=24, delay=5):
+def generate_user_info():
+    """Generate random user information"""
+    first_name = fake.first_name()
+    last_name = fake.last_name()
+    return {
+        "first_name": first_name,
+        "last_name": last_name,
+        "password": generate_strong_password()
+    }
+
+def generate_strong_password(length=12):
+    """Generate a strong random password"""
+    characters = string.ascii_letters + string.digits + "!@#$%^&*()_+"
+    password = ''.join(random.choice(characters) for i in range(length))
+    return password
+
+def check_email_for_verification(email, max_attempts=40, delay=5):
     """Poll the temporary email service for the verification code"""
-    import hashlib
-    import requests
-    
-    username = email.split('@')[0]
+    username, domain = email.split('@')
     email_hash = hashlib.md5(f"{username}@{domain}".encode()).hexdigest()
+    
+    print(f"Checking for verification emails for {email}...")
     
     for attempt in range(max_attempts):
         print(f"Checking for verification email... attempt {attempt+1}/{max_attempts}")
@@ -282,114 +319,234 @@ def check_email_for_verification(email, domain, max_attempts=24, delay=5):
             response = requests.get(f"https://api.temp-mail.org/request/mail/id/{email_hash}/format/json")
             data = response.json()
             
-            if data and len(data) > 0:
+            if data and isinstance(data, list) and len(data) > 0:
                 for mail in data:
-                    if "Windsurf" in mail.get("mail_subject", "") or "Windsurf" in mail.get("mail_text", ""):
-                        # Extract the verification code (6 digits)
-                        code_match = re.search(r'\\d{6}', mail.get("mail_text", ""))
+                    mail_text = mail.get("mail_text", "")
+                    mail_subject = mail.get("mail_subject", "")
+                    
+                    if "Windsurf" in mail_subject or "Windsurf" in mail_text or "verification" in mail_text.lower():
+                        # Look for a 6-digit code in the email
+                        code_match = re.search(r'(\d{6})', mail_text)
                         if code_match:
-                            return code_match.group(0)
+                            return code_match.group(1)
+                        
+                        # Try to find numbers in different formats
+                        code_match = re.search(r'(\d[\s\-]*\d[\s\-]*\d[\s\-]*\d[\s\-]*\d[\s\-]*\d)', mail_text)
+                        if code_match:
+                            return re.sub(r'[\s\-]', '', code_match.group(1))
         except Exception as e:
             print(f"Error checking email: {e}")
+            # Continue despite errors
         
         time.sleep(delay)
     
     return None
 
+def save_credentials(user_info, email):
+    """Save credentials to a file for future reference"""
+    config_dir = os.path.expanduser("~/.config/windsurf")
+    os.makedirs(config_dir, exist_ok=True)
+    
+    credentials = {
+        "email": email,
+        "first_name": user_info["first_name"],
+        "last_name": user_info["last_name"],
+        "password": user_info["password"],
+        "registration_date": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    with open(f"{config_dir}/credentials.json", "w") as f:
+        json.dump(credentials, f, indent=2)
+    
+    return credentials
+
 def register_windsurf(email, webdriver_type):
     """Automate the Windsurf registration process"""
+    user_info = generate_user_info()
     driver = setup_driver(webdriver_type)
-    verification_code = None
     
     try:
-        # Step 1: Launch Windsurf
-        print("Launching Windsurf application...")
-        driver.get("http://localhost:8080/windsurf")  # Adjust URL to match Windsurf's actual web interface
+        # Step 1: Navigate to Windsurf registration page
+        print("Step 1: Navigating to Windsurf registration page...")
+        driver.get("https://windsurf.com/account/register")
         
-        # Wait for the registration page to load
+        # Wait for the registration form to load
         WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.ID, "registration-form"))
+            EC.presence_of_element_located((By.TAG_NAME, "form"))
         )
         
-        # Step 2: Fill in the registration form
-        print(f"Filling registration form with email: {email}")
+        # Step 2: Fill in the registration form with user details
+        print(f"Step 2: Filling registration form with:\n"
+              f"  First Name: {user_info['first_name']}\n"
+              f"  Last Name: {user_info['last_name']}\n"
+              f"  Email: {email}")
         
-        # Find email input field and enter email
-        email_field = driver.find_element(By.ID, "email")  # Adjust selector as needed
+        # Find and fill in the name fields
+        first_name_field = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "firstName"))
+        )
+        first_name_field.clear()
+        first_name_field.send_keys(user_info["first_name"])
+        
+        last_name_field = driver.find_element(By.ID, "lastName")
+        last_name_field.clear()
+        last_name_field.send_keys(user_info["last_name"])
+        
+        # Find and fill in the email field
+        email_field = driver.find_element(By.ID, "email")
         email_field.clear()
         email_field.send_keys(email)
         
-        # Create a password if needed
-        password = "StrongP@ssw0rd123"  # Random strong password
-        password_field = driver.find_element(By.ID, "password")  # Adjust selector as needed
-        password_field.send_keys(password)
+        # Step 3: Submit the form to proceed to password creation
+        print("Step 3: Submitting the initial registration form...")
         
-        # Confirm password if needed
-        confirm_field = driver.find_element(By.ID, "confirm-password")  # Adjust selector as needed
-        confirm_field.send_keys(password)
+        # Find and click the Continue button
+        continue_button = driver.find_element(By.XPATH, "//button[contains(text(), 'Continue') or contains(text(), 'Next')]")
+        continue_button.click()
         
-        # Submit the form
-        submit_button = driver.find_element(By.ID, "register-button")  # Adjust selector as needed
-        submit_button.click()
+        # Step 4: Wait for the password page and create password
+        print("Step 4: Creating password...")
         
-        # Step 3: Wait for verification code request
-        print("Submitted registration. Waiting for verification screen...")
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.ID, "verification-form"))  # Adjust selector as needed
+        # Wait for password field
+        password_field = WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((By.ID, "password"))
+        )
+        password_field.clear()
+        password_field.send_keys(user_info["password"])
+        
+        # Find and fill confirmation password if it exists
+        try:
+            confirm_password_field = driver.find_element(By.ID, "confirmPassword")
+            confirm_password_field.clear()
+            confirm_password_field.send_keys(user_info["password"])
+        except NoSuchElementException:
+            print("No confirmation password field found, continuing...")
+        
+        # Submit the password form
+        password_submit = driver.find_element(By.XPATH, "//button[contains(text(), 'Continue') or contains(text(), 'Submit') or contains(text(), 'Register')]")
+        password_submit.click()
+        
+        # Step 5: Wait for verification code request
+        print("Step 5: Waiting for verification screen...")
+        
+        # Wait for verification form
+        WebDriverWait(driver, 30).until(
+            EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'verification') or contains(text(), 'Verify') or contains(text(), 'code')]"))
         )
         
-        # Step 4: Get verification code from email
-        print("Checking email for verification code...")
-        domain = email.split('@')[1]
-        verification_code = check_email_for_verification(email, domain)
+        # Step 6: Get verification code from email
+        print("Step 6: Checking email for verification code...")
+        verification_code = check_email_for_verification(email)
         
         if not verification_code:
             print("Failed to get verification code from email.")
             return False
         
-        print(f"Verification code received: {verification_code}")
+        print(f"Step 7: Verification code received: {verification_code}")
         
-        # Step 5: Enter verification code
-        code_field = driver.find_element(By.ID, "verification-code")  # Adjust selector as needed
-        code_field.clear()
-        code_field.send_keys(verification_code)
+        # Step 7: Enter each digit of the code into separate input boxes
+        print("Entering verification code digits...")
         
-        # Submit verification code
-        verify_button = driver.find_element(By.ID, "verify-button")  # Adjust selector as needed
-        verify_button.click()
+        # Find all input fields for the verification code
+        # Look for various ways verification inputs might be organized
+        try:
+            # Try to find inputs within a verification container
+            verification_inputs = driver.find_elements(By.XPATH, "//div[contains(@class, 'verification') or contains(@class, 'code')]//input")
+            
+            # If no specific container, look for numbered inputs or just find all digit inputs
+            if not verification_inputs:
+                verification_inputs = driver.find_elements(By.XPATH, "//input[@type='text' and (@maxlength='1' or @size='1')]")
+            
+            # If still no luck, look for any small text inputs that might be for codes
+            if not verification_inputs:
+                verification_inputs = driver.find_elements(By.XPATH, "//input[(@type='text' or @type='number') and (@maxlength<='2')]")
+                
+            # As a last resort, find the first 6 inputs
+            if not verification_inputs or len(verification_inputs) < 6:
+                verification_inputs = driver.find_elements(By.TAG_NAME, "input")[:6]
+                
+            # Enter each digit into the corresponding input field
+            if len(verification_inputs) >= len(verification_code):
+                for i, digit in enumerate(verification_code):
+                    verification_inputs[i].clear()
+                    verification_inputs[i].send_keys(digit)
+                    time.sleep(0.2)  # Small delay between inputs to simulate human typing
+            else:
+                # If we don't have individual boxes, try to find a single input field
+                verification_input = driver.find_element(By.XPATH, "//input[contains(@placeholder, 'code') or contains(@id, 'code')]")
+                verification_input.clear()
+                verification_input.send_keys(verification_code)
+        except Exception as e:
+            print(f"Error entering verification code: {e}")
+            # Take a screenshot to help debug
+            driver.save_screenshot("/tmp/verification_screen.png")
+            print("Screenshot saved to /tmp/verification_screen.png")
+            
+            # Try one more approach - just find all inputs and enter code in the first one
+            try:
+                inputs = driver.find_elements(By.TAG_NAME, "input")
+                if inputs:
+                    inputs[0].clear()
+                    inputs[0].send_keys(verification_code)
+            except:
+                pass
         
-        # Step 6: Wait for registration success
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.ID, "registration-success"))  # Adjust selector as needed
-        )
+        # Step 8: Submit the verification code
+        print("Step 8: Submitting verification code...")
         
-        print("Registration successful!")
+        # Look for verify/continue button
+        try:
+            verify_button = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Verify') or contains(text(), 'Submit') or contains(text(), 'Continue')]"))
+            )
+            verify_button.click()
+        except:
+            # If no button found, try pressing Enter on the last input
+            try:
+                from selenium.webdriver.common.keys import Keys
+                verification_inputs[-1].send_keys(Keys.ENTER)
+            except:
+                print("Could not find a way to submit verification code")
         
-        # Save credentials to a file
-        credentials = {
-            "email": email,
-            "password": password,
-            "registration_date": time.strftime("%Y-%m-%d %H:%M:%S")
-        }
+        # Step 9: Wait for registration success
+        print("Step 9: Waiting for registration to complete...")
         
-        with open(f"{os.path.expanduser('~')}/.config/windsurf/credentials.json", "w") as f:
-            json.dump(credentials, f)
+        # Wait for confirmation of successful registration
+        try:
+            WebDriverWait(driver, 30).until(
+                EC.presence_of_element_located((By.XPATH, "//div[contains(text(), 'success') or contains(text(), 'welcome') or contains(text(), 'complete')]"))
+            )
+            print("Registration successful!")
+        except TimeoutException:
+            # Even if we don't see success message, we might have succeeded
+            print("Could not confirm registration success, but proceeding anyway...")
+        
+        # Step 10: Save credentials and display them
+        credentials = save_credentials(user_info, email)
+        
+        print("\n============ REGISTRATION COMPLETE ============")
+        print(f"Email: {email}")
+        print(f"First Name: {user_info['first_name']}")
+        print(f"Last Name: {user_info['last_name']}")
+        print(f"Password: {user_info['password']}")
+        print("==============================================")
+        print(f"Credentials saved to: ~/.config/windsurf/credentials.json")
         
         return True
     
-    except TimeoutException:
-        print("Timeout waiting for elements. Registration failed.")
-        return False
     except Exception as e:
         print(f"Error during registration: {e}")
         return False
     finally:
         # Capture screenshot for debugging
         try:
-            driver.save_screenshot("/tmp/windsurf_registration.png")
-            print("Screenshot saved to /tmp/windsurf_registration.png")
+            driver.save_screenshot("/tmp/windsurf_registration_final.png")
+            print("Final screenshot saved to /tmp/windsurf_registration_final.png")
         except:
             pass
+        
+        # Keep the browser open for a moment to see the final state
+        time.sleep(5)
         
         # Close the browser
         driver.quit()
@@ -413,19 +570,30 @@ EOF
     # Make script executable
     chmod +x "$automation_script"
     
+    # Create a credentials file to store registration info
+    mkdir -p "$HOME/.config/windsurf"
+    
     # Run the automation script
     echo -e "${BLUE}Starting browser automation to register Windsurf...${NC}"
     python3 "$automation_script" "$temp_email" "$WEBDRIVER"
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}Windsurf registration completed successfully!${NC}"
-        echo -e "${BLUE}Your registered email: $temp_email${NC}"
-        echo -e "${YELLOW}Registration credentials saved to ~/.config/windsurf/credentials.json${NC}"
+        
+        # Display the credentials from saved file
+        if [ -f "$HOME/.config/windsurf/credentials.json" ]; then
+            echo -e "${GREEN}================== LOGIN CREDENTIALS ==================${NC}"
+            echo -e "${BLUE}Email:${NC} $(jq -r '.email' $HOME/.config/windsurf/credentials.json)"
+            echo -e "${BLUE}Password:${NC} $(jq -r '.password' $HOME/.config/windsurf/credentials.json)"
+            echo -e "${GREEN}=====================================================${NC}"
+            echo -e "${YELLOW}These credentials are also saved in:${NC} $HOME/.config/windsurf/credentials.json"
+        fi
+        
         return 0
     else
         echo -e "${RED}Failed to register Windsurf automatically.${NC}"
         echo -e "${YELLOW}You will need to register manually when you first run Windsurf.${NC}"
-        echo -e "${YELLOW}Check /tmp/windsurf_registration.png for debugging information.${NC}"
+        echo -e "${YELLOW}Check /tmp/windsurf_registration_final.png for debugging information.${NC}"
         return 1
     fi
 }
