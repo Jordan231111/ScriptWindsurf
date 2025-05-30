@@ -277,6 +277,7 @@ def setup_driver(browser_type):
     if browser_type == "chrome":
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.chrome.service import Service
+        from contextlib import closing
         
         options = Options()
         # Comment out the headless option to see the browser in action (for debugging)
@@ -302,10 +303,18 @@ def setup_driver(browser_type):
         except SessionNotCreatedException as e:
             if "user data directory is already in use" in str(e):
                 print("Retrying without custom user-data-dir due to session conflict...")
-                # Remove conflicting arguments and retry
-                cleaned_args = [arg for arg in options.arguments if not arg.startswith("--user-data-dir") and not arg.startswith("--profile-directory")]
-                options.arguments = cleaned_args
-                driver = webdriver.Chrome(service=service, options=options)
+                # Create a new options object instead of trying to modify arguments property
+                new_options = Options()
+                # Re-add all non-profile options
+                new_options.add_argument("--no-sandbox")
+                new_options.add_argument("--disable-dev-shm-usage")
+                new_options.add_argument("--disable-blink-features=AutomationControlled")
+                new_options.add_argument("--disable-extensions")
+                new_options.add_argument("--disable-gpu")
+                # Re-add experimental options
+                new_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                new_options.add_experimental_option("useAutomationExtension", False)
+                driver = webdriver.Chrome(service=service, options=new_options)
             else:
                 raise
     elif browser_type == "firefox":
@@ -402,12 +411,14 @@ def save_credentials(user_info, email):
     
     return credentials
 
-def register_windsurf(email, webdriver_type):
-    """Automate the Windsurf registration process"""
-    user_info = generate_user_info()
-    driver = setup_driver(webdriver_type)
+def register_windsurf(email, webdriver_type="chrome"):
+    """Register a new Windsurf account using browser automation"""
+    print("Starting browser automation to register Windsurf...")
     
+    user_info = generate_user_info()
+    driver = None
     try:
+        driver = setup_driver(webdriver_type)
         # Step 1: Navigate to Windsurf registration page
         print("Step 1: Navigating to Windsurf registration page...")
         driver.get("https://windsurf.com/account/register")
@@ -568,30 +579,35 @@ def register_windsurf(email, webdriver_type):
         
         print("\n============ REGISTRATION COMPLETE ============")
         print(f"Email: {email}")
-        print(f"First Name: {user_info['first_name']}")
-        print(f"Last Name: {user_info['last_name']}")
-        print(f"Password: {user_info['password']}")
-        print("==============================================")
-        print(f"Credentials saved to: ~/.config/windsurf/credentials.json")
-        
-        return True
-    
+        # Check if the registration was successful
+        if "dashboard" in driver.current_url.lower() or "welcome" in driver.current_url.lower():
+            print(f"\n{GREEN}Registration successful!{NC}")
+            return True
+        else:
+            print(f"\n{YELLOW}Registration might not be complete. Please check manually.{NC}")
+            return False
     except Exception as e:
-        print(f"Error during registration: {e}")
+        print(f"\n{RED}Error during registration: {e}{NC}")
         return False
     finally:
-        # Capture screenshot for debugging
-        try:
-            driver.save_screenshot("/tmp/windsurf_registration_final.png")
-            print("Final screenshot saved to /tmp/windsurf_registration_final.png")
-        except:
-            pass
-        
-        # Keep the browser open for a moment to see the final state
-        time.sleep(5)
-        
-        # Close the browser
-        driver.quit()
+        # Ensure browser is always closed properly
+        if driver:
+            # Capture screenshot for debugging before closing
+            try:
+                driver.save_screenshot("/tmp/windsurf_registration_final.png")
+                print("Final screenshot saved to /tmp/windsurf_registration_final.png")
+            except:
+                pass
+            
+            # Keep the browser open for a moment to see the final state
+            time.sleep(5)
+            
+            # Close the browser
+            try:
+                driver.quit()
+                print("Browser closed successfully.")
+            except Exception as e:
+                print(f"Error closing browser: {e}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
