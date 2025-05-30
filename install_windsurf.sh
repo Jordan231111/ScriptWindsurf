@@ -45,6 +45,80 @@ detect_os() {
     echo -e "${BLUE}Detected OS: $OS $VERSION${NC}"
 }
 
+# Function to check if running in a graphical environment
+has_display() {
+    # Check if DISPLAY is set and not empty
+    [ -n "$DISPLAY" ] || return 1
+    
+    # Check if running in a graphical environment
+    if command -v xdpyinfo >/dev/null 2>&1; then
+        xdpyinfo >/dev/null 2>&1 && return 0
+    fi
+    
+    # Check for Wayland
+    [ -n "$WAYLAND_DISPLAY" ] && return 0
+    
+    return 1
+}
+
+# Function to launch the Windsurf GUI application
+launch_windsurf() {
+    echo -e "${BLUE}Attempting to launch Windsurf...${NC}"
+    
+    # Check if we're in a graphical environment
+    if ! has_display; then
+        echo -e "${YELLOW}No display detected. Cannot launch GUI application.${NC}"
+        echo -e "${YELLOW}You can launch Windsurf manually when in a graphical environment by running: ${NC}windsurf"
+        return 1
+    fi
+    
+    # Get the current user who is running sudo
+    ACTUAL_USER=""
+    if [ -n "$SUDO_USER" ]; then
+        ACTUAL_USER="$SUDO_USER"
+    elif [ -n "$LOGNAME" ]; then
+        ACTUAL_USER="$LOGNAME"
+    fi
+    
+    if [ -z "$ACTUAL_USER" ]; then
+        echo -e "${YELLOW}Cannot determine the actual user. Launch Windsurf manually.${NC}"
+        return 1
+    fi
+    
+    # Try to find the .desktop file
+    DESKTOP_FILE=$(find /usr/share/applications ~/.local/share/applications -name "*windsurf*.desktop" 2>/dev/null | head -n 1)
+    
+    if [ -n "$DESKTOP_FILE" ]; then
+        # Extract the Exec line from the .desktop file
+        EXEC_CMD=$(grep "^Exec=" "$DESKTOP_FILE" | head -n 1 | sed 's/^Exec=//' | sed 's/%[a-zA-Z]//')
+        if [ -n "$EXEC_CMD" ]; then
+            echo -e "${GREEN}Launching Windsurf using desktop file...${NC}"
+            # Launch as the actual user
+            if [ "$ACTUAL_USER" != "root" ]; then
+                su - "$ACTUAL_USER" -c "nohup $EXEC_CMD >/dev/null 2>&1 &"
+            else
+                nohup $EXEC_CMD >/dev/null 2>&1 &
+            fi
+            return 0
+        fi
+    fi
+    
+    # If desktop file not found or Exec line not found, try direct command
+    if command -v windsurf >/dev/null 2>&1; then
+        echo -e "${GREEN}Launching Windsurf directly...${NC}"
+        # Launch as the actual user
+        if [ "$ACTUAL_USER" != "root" ]; then
+            su - "$ACTUAL_USER" -c "nohup windsurf >/dev/null 2>&1 &"
+        else
+            nohup windsurf >/dev/null 2>&1 &
+        fi
+        return 0
+    fi
+    
+    echo -e "${YELLOW}Could not find Windsurf executable. Please launch it manually.${NC}"
+    return 1
+}
+
 # Function to install on Debian-based systems (Ubuntu, Debian, etc.)
 install_debian() {
     echo -e "${BLUE}Installing Windsurf on Debian/Ubuntu-based system...${NC}"
@@ -245,4 +319,8 @@ esac
 echo
 echo -e "${GREEN}=== Installation Complete ===${NC}"
 echo -e "${BLUE}Windsurf has been installed on your system.${NC}"
-echo -e "${BLUE}You can run it by typing 'windsurf' in your terminal.${NC}" 
+
+# Launch the application
+launch_windsurf
+
+echo -e "${BLUE}You can always run Windsurf by typing 'windsurf' in your terminal.${NC}" 
