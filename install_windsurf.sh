@@ -161,25 +161,45 @@ register_windsurf() {
     if ! command_exists python3; then
         echo -e "${YELLOW}Installing Python 3 for browser automation...${NC}"
         if command_exists apt-get; then
-            apt-get update && apt-get install -y python3 python3-pip
+            apt-get update && apt-get install -y python3 python3-pip python3-venv
         elif command_exists dnf; then
-            dnf install -y python3 python3-pip
+            dnf install -y python3 python3-pip python3-venv
         elif command_exists yum; then
-            yum install -y python3 python3-pip
+            yum install -y python3 python3-pip python3-venv
         elif command_exists zypper; then
-            zypper install -y python3 python3-pip
+            zypper install -y python3 python3-pip python3-venv
         elif command_exists pacman; then
-            pacman -Sy --noconfirm python python-pip
+            pacman -Sy --noconfirm python python-pip python-virtualenv
         else
             echo -e "${RED}Could not install Python 3. Please install it manually.${NC}"
             echo -e "${YELLOW}You will need to register manually when you first run Windsurf.${NC}"
             return 1
         fi
+    else
+        # Ensure venv module is installed
+        echo -e "${YELLOW}Ensuring Python virtual environment module is installed...${NC}"
+        if command_exists apt-get; then
+            apt-get update && apt-get install -y python3-venv
+        elif command_exists dnf; then
+            dnf install -y python3-venv
+        elif command_exists yum; then
+            yum install -y python3-venv
+        elif command_exists zypper; then
+            zypper install -y python3-venv
+        elif command_exists pacman; then
+            pacman -Sy --noconfirm python-virtualenv
+        fi
     fi
+    
+    # Create a virtual environment for Python packages
+    echo -e "${BLUE}Creating Python virtual environment...${NC}"
+    VENV_DIR=$(mktemp -d)/windsurf_venv
+    python3 -m venv "$VENV_DIR"
     
     # Install required Python packages for browser automation
     echo -e "${BLUE}Installing required Python packages for browser automation...${NC}"
-    pip3 install selenium webdriver-manager requests faker
+    # Use the pip from the virtual environment
+    "$VENV_DIR/bin/pip" install selenium webdriver-manager requests faker
 
     # Check if Chrome or Firefox is installed
     BROWSER=""
@@ -575,7 +595,7 @@ EOF
     
     # Run the automation script
     echo -e "${BLUE}Starting browser automation to register Windsurf...${NC}"
-    python3 "$automation_script" "$temp_email" "$WEBDRIVER"
+    "$VENV_DIR/bin/python" "$automation_script" "$temp_email" "$WEBDRIVER"
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}Windsurf registration completed successfully!${NC}"
@@ -589,11 +609,20 @@ EOF
             echo -e "${YELLOW}These credentials are also saved in:${NC} $HOME/.config/windsurf/credentials.json"
         fi
         
+        # Clean up the virtual environment
+        echo -e "${BLUE}Cleaning up virtual environment...${NC}"
+        rm -rf "$(dirname "$VENV_DIR")"
+        
         return 0
     else
         echo -e "${RED}Failed to register Windsurf automatically.${NC}"
         echo -e "${YELLOW}You will need to register manually when you first run Windsurf.${NC}"
         echo -e "${YELLOW}Check /tmp/windsurf_registration_final.png for debugging information.${NC}"
+        
+        # Clean up the virtual environment even on failure
+        echo -e "${BLUE}Cleaning up virtual environment...${NC}"
+        rm -rf "$(dirname "$VENV_DIR")"
+        
         return 1
     fi
 }
