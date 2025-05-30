@@ -200,7 +200,7 @@ register_windsurf() {
     echo -e "${BLUE}Installing required Python packages for browser automation...${NC}"
     # Use the pip from the virtual environment
     "$VENV_DIR/bin/pip" install selenium webdriver-manager requests faker
-
+    
     # Check if Chrome or Firefox is installed
     BROWSER=""
     WEBDRIVER=""
@@ -262,9 +262,10 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, SessionNotCreatedException
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.firefox import GeckoDriverManager
+import secrets
 
 # Initialize Faker to generate random names
 fake = Faker()
@@ -296,7 +297,17 @@ def setup_driver(browser_type):
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
         service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
+        try:
+            driver = webdriver.Chrome(service=service, options=options)
+        except SessionNotCreatedException as e:
+            if "user data directory is already in use" in str(e):
+                print("Retrying without custom user-data-dir due to session conflict...")
+                # Remove conflicting arguments and retry
+                cleaned_args = [arg for arg in options.arguments if not arg.startswith("--user-data-dir") and not arg.startswith("--profile-directory")]
+                options.arguments = cleaned_args
+                driver = webdriver.Chrome(service=service, options=options)
+            else:
+                raise
     elif browser_type == "firefox":
         from selenium.webdriver.firefox.options import Options
         from selenium.webdriver.firefox.service import Service
@@ -333,7 +344,7 @@ def generate_user_info():
 def generate_strong_password(length=12):
     """Generate a strong random password"""
     characters = string.ascii_letters + string.digits + "!@#$%^&*()_+"
-    password = ''.join(random.choice(characters) for i in range(length))
+    password = ''.join(secrets.choice(characters) for _ in range(length))
     return password
 
 def check_email_for_verification(email, max_attempts=40, delay=5):
