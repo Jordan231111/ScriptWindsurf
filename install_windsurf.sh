@@ -257,6 +257,7 @@ import random
 import hashlib
 import tempfile
 import requests
+import os
 from faker import Faker
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -266,6 +267,13 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException,
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.firefox import GeckoDriverManager
 import secrets
+
+# Define color constants for Python script
+RED = '\033[0;31m'
+GREEN = '\033[0;32m'
+YELLOW = '\033[0;33m'
+BLUE = '\033[0;34m'
+NC = '\033[0m'  # No Color
 
 # Initialize Faker to generate random names
 fake = Faker()
@@ -277,46 +285,64 @@ def setup_driver(browser_type):
     if browser_type == "chrome":
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.chrome.service import Service
+        import shutil
         from contextlib import closing
         
-        options = Options()
-        # Comment out the headless option to see the browser in action (for debugging)
-        # options.add_argument("--headless")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-blink-features=AutomationControlled")
+        # Maximum retries for browser setup
+        max_retries = 3
+        retry_count = 0
+        last_exception = None
         
-        # Create a unique user data directory to prevent conflicts
-        unique_user_dir = tempfile.mkdtemp()
-        options.add_argument(f"--user-data-dir={unique_user_dir}")
-        options.add_argument("--profile-directory=WindsurfAutomation")
-        
-        # Disable extensions and other settings that might cause conflicts
-        options.add_argument("--disable-extensions")
-        options.add_argument("--disable-gpu")
-        
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option("useAutomationExtension", False)
-        service = Service(ChromeDriverManager().install())
-        try:
-            driver = webdriver.Chrome(service=service, options=options)
-        except SessionNotCreatedException as e:
-            if "user data directory is already in use" in str(e):
-                print("Retrying without custom user-data-dir due to session conflict...")
-                # Create a new options object instead of trying to modify arguments property
-                new_options = Options()
-                # Re-add all non-profile options
-                new_options.add_argument("--no-sandbox")
-                new_options.add_argument("--disable-dev-shm-usage")
-                new_options.add_argument("--disable-blink-features=AutomationControlled")
-                new_options.add_argument("--disable-extensions")
-                new_options.add_argument("--disable-gpu")
-                # Re-add experimental options
-                new_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-                new_options.add_experimental_option("useAutomationExtension", False)
-                driver = webdriver.Chrome(service=service, options=new_options)
-            else:
-                raise
+        while retry_count < max_retries:
+            try:
+                options = Options()
+                # Always start fresh - useful for automation
+                options.add_argument("--incognito")
+                options.add_argument("--no-sandbox")
+                options.add_argument("--disable-dev-shm-usage")
+                options.add_argument("--disable-blink-features=AutomationControlled")
+                options.add_argument("--disable-extensions")
+                options.add_argument("--disable-gpu")
+                
+                # Handle user data directory differently in each retry
+                if retry_count == 0:
+                    # First try: Use a unique user data directory
+                    unique_user_dir = tempfile.mkdtemp()
+                    options.add_argument(f"--user-data-dir={unique_user_dir}")
+                    print(f"Using unique user data dir: {unique_user_dir}")
+                elif retry_count == 1:
+                    # Second try: No custom user data directory
+                    print("Trying without custom user-data-dir")
+                    # No user-data-dir setting
+                else:
+                    # Last try: Force temporary directory and use --remote-debugging-port
+                    unique_user_dir = tempfile.mkdtemp()
+                    options.add_argument(f"--user-data-dir={unique_user_dir}")
+                    options.add_argument("--remote-debugging-port=9222")
+                    print(f"Last attempt with remote debugging port and dir: {unique_user_dir}")
+                
+                options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                options.add_experimental_option("useAutomationExtension", False)
+                
+                service = Service(ChromeDriverManager().install())
+                driver = webdriver.Chrome(service=service, options=options)
+                return driver  # Success!
+                
+            except SessionNotCreatedException as e:
+                retry_count += 1
+                last_exception = e
+                print(f"Browser setup failed (attempt {retry_count}/{max_retries}): {e}")
+                # Clean up any temp directories we created
+                if 'unique_user_dir' in locals() and os.path.exists(unique_user_dir):
+                    try:
+                        shutil.rmtree(unique_user_dir)
+                        print(f"Cleaned up temporary directory: {unique_user_dir}")
+                    except Exception as cleanup_error:
+                        print(f"Failed to clean up directory {unique_user_dir}: {cleanup_error}")
+                        
+                if retry_count >= max_retries:
+                    print(f"Failed to start Chrome after {max_retries} attempts")
+                    raise last_exception
     elif browser_type == "firefox":
         from selenium.webdriver.firefox.options import Options
         from selenium.webdriver.firefox.service import Service
