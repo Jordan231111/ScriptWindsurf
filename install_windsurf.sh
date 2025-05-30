@@ -17,12 +17,58 @@ NC='\033[0m' # No Color
 WINDSURF_GPG_KEY_URL="https://windsurf-stable.codeiumdata.com/wVxQEIWkwPUEAGf3/windsurf.gpg"
 WINDSURF_REPO_URL="https://windsurf-stable.codeiumdata.com/wVxQEIWkwPUEAGf3/apt"
 APP_NAME="windsurf"
+AUTO_REGISTER=${AUTO_REGISTER:-false} # Set to true to enable automatic registration
 
 # Check if running as root or with sudo
 if [ "$(id -u)" -ne 0 ]; then
     echo -e "${RED}This script must be run as root or with sudo${NC}"
     exit 1
 fi
+
+# Function to check if a command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Check and install dependencies if needed
+check_dependencies() {
+    echo -e "${BLUE}Checking dependencies...${NC}"
+    
+    local deps_to_install=()
+    
+    # Check for curl
+    if ! command_exists curl; then
+        deps_to_install+=("curl")
+    fi
+    
+    # Check for jq (for JSON parsing)
+    if ! command_exists jq; then
+        deps_to_install+=("jq")
+    fi
+    
+    # Install missing dependencies
+    if [ ${#deps_to_install[@]} -gt 0 ]; then
+        echo -e "${YELLOW}Installing required dependencies: ${deps_to_install[*]}${NC}"
+        
+        if command_exists apt-get; then
+            apt-get update
+            apt-get install -y "${deps_to_install[@]}"
+        elif command_exists dnf; then
+            dnf install -y "${deps_to_install[@]}"
+        elif command_exists yum; then
+            yum install -y "${deps_to_install[@]}"
+        elif command_exists zypper; then
+            zypper install -y "${deps_to_install[@]}"
+        elif command_exists pacman; then
+            pacman -Sy --noconfirm "${deps_to_install[@]}"
+        else
+            echo -e "${RED}Unable to install dependencies automatically. Please install ${deps_to_install[*]} manually.${NC}"
+            exit 1
+        fi
+    fi
+    
+    echo -e "${GREEN}All dependencies are installed.${NC}"
+}
 
 # Function to detect the OS
 detect_os() {
@@ -43,6 +89,345 @@ detect_os() {
     fi
     
     echo -e "${BLUE}Detected OS: $OS $VERSION${NC}"
+}
+
+# Function to get a temporary email address from temp-mail.org
+get_temp_email() {
+    echo -e "${BLUE}Getting a temporary email address...${NC}"
+    
+    # Using temp-mail.org API to get a temporary email
+    local response=$(curl -s "https://api.temp-mail.org/request/domains/format/json")
+    local domain=$(echo "$response" | jq -r '.[] | select(. != null) | .[0]')
+    
+    if [ -z "$domain" ]; then
+        echo -e "${RED}Failed to get a domain from temp-mail.org${NC}"
+        return 1
+    fi
+    
+    # Generate a random username
+    local username=$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 10 | head -n 1)
+    local email="${username}@${domain}"
+    
+    echo -e "${GREEN}Temporary email address: $email${NC}"
+    echo "$email"
+}
+
+# Function to check for emails in the temporary mailbox
+check_temp_email() {
+    local email="$1"
+    local username=$(echo "$email" | cut -d@ -f1)
+    local domain=$(echo "$email" | cut -d@ -f2)
+    
+    echo -e "${BLUE}Checking temporary mailbox for messages...${NC}"
+    
+    # Hash the email for the API request
+    local hash=$(echo -n "$username@$domain" | md5sum | cut -d' ' -f1)
+    
+    # Check for messages
+    local messages=$(curl -s "https://api.temp-mail.org/request/mail/id/$hash/format/json")
+    
+    echo "$messages"
+}
+
+# Function to extract 2FA code from email content
+extract_2fa_code() {
+    local email_content="$1"
+    
+    echo -e "${BLUE}Extracting 2FA code from email...${NC}"
+    
+    # Pattern to match a 6-digit verification code based on the Windsurf email format
+    # Looking for patterns like "909318" in the email
+    local code=$(echo "$email_content" | grep -o -E '[0-9]{6}' | head -n 1)
+    
+    if [ -z "$code" ]; then
+        echo -e "${RED}Failed to extract verification code from email${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}Extracted verification code: $code${NC}"
+    echo "$code"
+}
+
+# Function to register Windsurf with temporary email and 2FA
+register_windsurf() {
+    if [ "$AUTO_REGISTER" != "true" ]; then
+        echo -e "${YELLOW}Automatic registration is disabled. Skipping...${NC}"
+        return 0
+    fi
+    
+    echo -e "${BLUE}Starting automatic Windsurf registration with browser automation...${NC}"
+    
+    # Check for Python (needed for Selenium)
+    if ! command_exists python3; then
+        echo -e "${YELLOW}Installing Python 3 for browser automation...${NC}"
+        if command_exists apt-get; then
+            apt-get update && apt-get install -y python3 python3-pip
+        elif command_exists dnf; then
+            dnf install -y python3 python3-pip
+        elif command_exists yum; then
+            yum install -y python3 python3-pip
+        elif command_exists zypper; then
+            zypper install -y python3 python3-pip
+        elif command_exists pacman; then
+            pacman -Sy --noconfirm python python-pip
+        else
+            echo -e "${RED}Could not install Python 3. Please install it manually.${NC}"
+            echo -e "${YELLOW}You will need to register manually when you first run Windsurf.${NC}"
+            return 1
+        fi
+    fi
+    
+    # Install required Python packages for browser automation
+    echo -e "${BLUE}Installing required Python packages for browser automation...${NC}"
+    pip3 install selenium webdriver-manager
+
+    # Check if Chrome or Firefox is installed
+    BROWSER=""
+    WEBDRIVER=""
+    
+    if command_exists google-chrome || command_exists google-chrome-stable; then
+        BROWSER="chrome"
+        WEBDRIVER="chrome"
+    elif command_exists firefox; then
+        BROWSER="firefox"
+        WEBDRIVER="firefox"
+    else
+        echo -e "${YELLOW}Installing Google Chrome for browser automation...${NC}"
+        if command_exists apt-get; then
+            wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add -
+            echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+            apt-get update && apt-get install -y google-chrome-stable
+            BROWSER="chrome"
+            WEBDRIVER="chrome"
+        elif command_exists dnf; then
+            dnf install -y https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm
+            BROWSER="chrome"
+            WEBDRIVER="chrome"
+        elif command_exists zypper; then
+            zypper install -y https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm
+            BROWSER="chrome"
+            WEBDRIVER="chrome"
+        else
+            echo -e "${RED}Could not install a supported browser. Please install Chrome or Firefox manually.${NC}"
+            echo -e "${YELLOW}You will need to register manually when you first run Windsurf.${NC}"
+            return 1
+        fi
+    fi
+    
+    # Get a temporary email
+    local temp_email=$(get_temp_email)
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Failed to get temporary email. Registration aborted.${NC}"
+        return 1
+    fi
+    
+    # Create Python script for browser automation
+    local automation_script=$(mktemp --suffix=.py)
+    echo -e "${BLUE}Creating browser automation script...${NC}"
+    
+    cat > "$automation_script" << EOF
+#!/usr/bin/env python3
+import time
+import re
+import sys
+import json
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
+from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.firefox import GeckoDriverManager
+
+def setup_driver(browser_type):
+    options = None
+    driver = None
+    
+    if browser_type == "chrome":
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
+        
+        options = Options()
+        options.add_argument("--headless")  # Run in headless mode
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=options)
+    elif browser_type == "firefox":
+        from selenium.webdriver.firefox.options import Options
+        from selenium.webdriver.firefox.service import Service
+        
+        options = Options()
+        options.add_argument("--headless")
+        service = Service(GeckoDriverManager().install())
+        driver = webdriver.Firefox(service=service, options=options)
+    else:
+        print("Unsupported browser type")
+        sys.exit(1)
+        
+    return driver
+
+def check_email_for_verification(email, domain, max_attempts=24, delay=5):
+    """Poll the temporary email service for the verification code"""
+    import hashlib
+    import requests
+    
+    username = email.split('@')[0]
+    email_hash = hashlib.md5(f"{username}@{domain}".encode()).hexdigest()
+    
+    for attempt in range(max_attempts):
+        print(f"Checking for verification email... attempt {attempt+1}/{max_attempts}")
+        
+        try:
+            response = requests.get(f"https://api.temp-mail.org/request/mail/id/{email_hash}/format/json")
+            data = response.json()
+            
+            if data and len(data) > 0:
+                for mail in data:
+                    if "Windsurf" in mail.get("mail_subject", "") or "Windsurf" in mail.get("mail_text", ""):
+                        # Extract the verification code (6 digits)
+                        code_match = re.search(r'\\d{6}', mail.get("mail_text", ""))
+                        if code_match:
+                            return code_match.group(0)
+        except Exception as e:
+            print(f"Error checking email: {e}")
+        
+        time.sleep(delay)
+    
+    return None
+
+def register_windsurf(email, webdriver_type):
+    """Automate the Windsurf registration process"""
+    driver = setup_driver(webdriver_type)
+    verification_code = None
+    
+    try:
+        # Step 1: Launch Windsurf
+        print("Launching Windsurf application...")
+        driver.get("http://localhost:8080/windsurf")  # Adjust URL to match Windsurf's actual web interface
+        
+        # Wait for the registration page to load
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((By.ID, "registration-form"))
+        )
+        
+        # Step 2: Fill in the registration form
+        print(f"Filling registration form with email: {email}")
+        
+        # Find email input field and enter email
+        email_field = driver.find_element(By.ID, "email")  # Adjust selector as needed
+        email_field.clear()
+        email_field.send_keys(email)
+        
+        # Create a password if needed
+        password = "StrongP@ssw0rd123"  # Random strong password
+        password_field = driver.find_element(By.ID, "password")  # Adjust selector as needed
+        password_field.send_keys(password)
+        
+        # Confirm password if needed
+        confirm_field = driver.find_element(By.ID, "confirm-password")  # Adjust selector as needed
+        confirm_field.send_keys(password)
+        
+        # Submit the form
+        submit_button = driver.find_element(By.ID, "register-button")  # Adjust selector as needed
+        submit_button.click()
+        
+        # Step 3: Wait for verification code request
+        print("Submitted registration. Waiting for verification screen...")
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((By.ID, "verification-form"))  # Adjust selector as needed
+        )
+        
+        # Step 4: Get verification code from email
+        print("Checking email for verification code...")
+        domain = email.split('@')[1]
+        verification_code = check_email_for_verification(email, domain)
+        
+        if not verification_code:
+            print("Failed to get verification code from email.")
+            return False
+        
+        print(f"Verification code received: {verification_code}")
+        
+        # Step 5: Enter verification code
+        code_field = driver.find_element(By.ID, "verification-code")  # Adjust selector as needed
+        code_field.clear()
+        code_field.send_keys(verification_code)
+        
+        # Submit verification code
+        verify_button = driver.find_element(By.ID, "verify-button")  # Adjust selector as needed
+        verify_button.click()
+        
+        # Step 6: Wait for registration success
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((By.ID, "registration-success"))  # Adjust selector as needed
+        )
+        
+        print("Registration successful!")
+        
+        # Save credentials to a file
+        credentials = {
+            "email": email,
+            "password": password,
+            "registration_date": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        with open(f"{os.path.expanduser('~')}/.config/windsurf/credentials.json", "w") as f:
+            json.dump(credentials, f)
+        
+        return True
+    
+    except TimeoutException:
+        print("Timeout waiting for elements. Registration failed.")
+        return False
+    except Exception as e:
+        print(f"Error during registration: {e}")
+        return False
+    finally:
+        # Capture screenshot for debugging
+        try:
+            driver.save_screenshot("/tmp/windsurf_registration.png")
+            print("Screenshot saved to /tmp/windsurf_registration.png")
+        except:
+            pass
+        
+        # Close the browser
+        driver.quit()
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: python script.py <email> <webdriver_type>")
+        sys.exit(1)
+    
+    email = sys.argv[1]
+    webdriver_type = sys.argv[2]
+    
+    success = register_windsurf(email, webdriver_type)
+    
+    if success:
+        sys.exit(0)
+    else:
+        sys.exit(1)
+EOF
+    
+    # Make script executable
+    chmod +x "$automation_script"
+    
+    # Run the automation script
+    echo -e "${BLUE}Starting browser automation to register Windsurf...${NC}"
+    python3 "$automation_script" "$temp_email" "$WEBDRIVER"
+    
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}Windsurf registration completed successfully!${NC}"
+        echo -e "${BLUE}Your registered email: $temp_email${NC}"
+        echo -e "${YELLOW}Registration credentials saved to ~/.config/windsurf/credentials.json${NC}"
+        return 0
+    else
+        echo -e "${RED}Failed to register Windsurf automatically.${NC}"
+        echo -e "${YELLOW}You will need to register manually when you first run Windsurf.${NC}"
+        echo -e "${YELLOW}Check /tmp/windsurf_registration.png for debugging information.${NC}"
+        return 1
+    fi
 }
 
 # Function to launch the Windsurf GUI application - simplified to just run the command
@@ -225,60 +610,107 @@ install_other() {
     fi
 }
 
+# Show usage information
+show_usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo
+    echo "Options:"
+    echo "  --auto-register       Enable automatic registration with temp email and 2FA"
+    echo "  --help                Show this help message"
+    echo
+}
+
+# Parse command line arguments
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --auto-register)
+                AUTO_REGISTER=true
+                ;;
+            --help)
+                show_usage
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Unknown option: $1${NC}"
+                show_usage
+                exit 1
+                ;;
+        esac
+        shift
+    done
+}
+
 # Main installation process
-echo -e "${GREEN}=== Windsurf Installation Script ===${NC}"
-echo -e "${BLUE}This script will install Windsurf on your system.${NC}"
-echo
+main() {
+    echo -e "${GREEN}=== Windsurf Installation Script ===${NC}"
+    echo -e "${BLUE}This script will install Windsurf on your system.${NC}"
+    echo
+    
+    # Parse command line arguments
+    parse_args "$@"
+    
+    # Check and install dependencies
+    check_dependencies
+    
+    # Detect the OS
+    detect_os
+    
+    # Install based on the detected OS
+    case "$OS" in
+        ubuntu|debian|linuxmint|elementary|pop|zorin)
+            install_debian
+            ;;
+        fedora|rhel|centos|almalinux|rocky|ol)
+            install_rhel
+            ;;
+        opensuse*|suse|sles)
+            install_suse
+            ;;
+        arch|manjaro|endeavouros)
+            install_arch
+            ;;
+        *)
+            # If OS_LIKE is defined, try to use that
+            if [ -n "$OS_LIKE" ]; then
+                case "$OS_LIKE" in
+                    *debian*)
+                        install_debian
+                        ;;
+                    *fedora*|*rhel*)
+                        install_rhel
+                        ;;
+                    *suse*)
+                        install_suse
+                        ;;
+                    *arch*)
+                        install_arch
+                        ;;
+                    *)
+                        install_other
+                        ;;
+                esac
+            else
+                install_other
+            fi
+            ;;
+    esac
+    
+    # Installation completed
+    echo
+    echo -e "${GREEN}=== Installation Complete ===${NC}"
+    echo -e "${BLUE}Windsurf has been installed on your system.${NC}"
+    
+    # Automatically register if enabled
+    if [ "$AUTO_REGISTER" = "true" ]; then
+        register_windsurf
+    fi
+    
+    # Launch the application
+    launch_windsurf
+    
+    echo -e "${BLUE}You can always run Windsurf by typing 'windsurf' in your terminal.${NC}"
+}
 
-# Detect the OS
-detect_os
-
-# Install based on the detected OS
-case "$OS" in
-    ubuntu|debian|linuxmint|elementary|pop|zorin)
-        install_debian
-        ;;
-    fedora|rhel|centos|almalinux|rocky|ol)
-        install_rhel
-        ;;
-    opensuse*|suse|sles)
-        install_suse
-        ;;
-    arch|manjaro|endeavouros)
-        install_arch
-        ;;
-    *)
-        # If OS_LIKE is defined, try to use that
-        if [ -n "$OS_LIKE" ]; then
-            case "$OS_LIKE" in
-                *debian*)
-                    install_debian
-                    ;;
-                *fedora*|*rhel*)
-                    install_rhel
-                    ;;
-                *suse*)
-                    install_suse
-                    ;;
-                *arch*)
-                    install_arch
-                    ;;
-                *)
-                    install_other
-                    ;;
-            esac
-        else
-            install_other
-        fi
-        ;;
-esac
-
-# Installation completed
-echo
-echo -e "${GREEN}=== Installation Complete ===${NC}"
-echo -e "${BLUE}Windsurf has been installed on your system.${NC}"
-
-# Launch the application
-launch_windsurf
-
-echo -e "${BLUE}You can always run Windsurf by typing 'windsurf' in your terminal.${NC}" 
+# Execute main function with all script arguments
+main "$@" 

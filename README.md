@@ -18,6 +18,7 @@ A universal installation script for Windsurf that works across all major Linux d
 - Proper repository configuration
 - Automatic application launch after installation
 - Fallback mechanisms for non-standard distributions
+- Automatic registration with temporary email and 2FA (optional)
 
 ## Quick Installation
 
@@ -27,38 +28,69 @@ To install Windsurf, you can use the following one-liner:
 curl -fsSL https://raw.githubusercontent.com/Jordan231111/ScriptWindsurf/main/install_windsurf.sh | sudo bash
 ```
 
-This command will:
-1. Download the installation script securely via HTTPS
-2. Execute it with sudo privileges to install Windsurf
-3. Launch the Windsurf application if you're in a graphical environment
-
-## Security Note
-
-The one-liner above downloads the script via HTTPS and executes it directly. For enhanced security, you may prefer to inspect the script before running it:
+If you want to enable automatic registration with a temporary email address and 2FA:
 
 ```bash
-# Download the script
+curl -fsSL https://raw.githubusercontent.com/Jordan231111/ScriptWindsurf/main/install_windsurf.sh | sudo bash -s -- --auto-register
+```
+
+## Security Notice
+
+The installation script requires root privileges to:
+1. Add the Windsurf repository
+2. Install necessary packages
+3. Configure system settings
+
+For security, we recommend reviewing the script before execution:
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/Jordan231111/ScriptWindsurf/main/install_windsurf.sh -o install_windsurf.sh
-
-# Inspect the script
-less install_windsurf.sh
-
-# Make it executable
+less install_windsurf.sh  # Review the code
 chmod +x install_windsurf.sh
-
-# Run the script
 sudo ./install_windsurf.sh
 ```
 
-## Manual Installation
+## Advanced Usage
 
-If you prefer to install Windsurf manually, the script can guide you through the process even if your distribution isn't directly supported:
+The script supports several command-line options:
 
-1. Download the GPG key: `curl -fsSL "https://windsurf-stable.codeiumdata.com/wVxQEIWkwPUEAGf3/windsurf.gpg" | sudo gpg --dearmor -o /usr/share/keyrings/windsurf-stable-archive-keyring.gpg`
-2. Add the repository: `echo "deb [signed-by=/usr/share/keyrings/windsurf-stable-archive-keyring.gpg arch=amd64] https://windsurf-stable.codeiumdata.com/wVxQEIWkwPUEAGf3/apt stable main" | sudo tee /etc/apt/sources.list.d/windsurf.list > /dev/null`
-3. Update package lists: `sudo apt-get update`
-4. Install Windsurf: `sudo apt-get install windsurf`
+```
+Usage: ./install_windsurf.sh [OPTIONS]
+
+Options:
+  --auto-register       Enable automatic registration with temp email and 2FA
+  --help                Show this help message
+```
+
+### Automatic Registration
+
+The `--auto-register` option enables a streamlined registration process that:
+
+1. Obtains a temporary email address from temp-mail.org
+2. Uses that email for Windsurf registration
+3. Automatically retrieves the 2FA code sent to that email
+4. Completes the registration process
+
+This is useful for:
+- Automated deployments
+- Testing environments
+- CI/CD pipelines
+
+## Dependencies
+
+The script will automatically install required dependencies:
+- curl (for downloading packages and API calls)
+- jq (for JSON parsing)
+
+## Troubleshooting
+
+If you encounter issues:
+
+1. Check your system's package manager is working correctly
+2. Ensure you have internet connectivity
+3. Verify the GPG key and repository URLs are accessible
+4. For registration issues, check if temp-mail.org is accessible from your network
 
 ## License
 
-See the [LICENSE](LICENSE) file for details. 
+[MIT License](LICENSE) 
