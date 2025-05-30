@@ -45,32 +45,9 @@ detect_os() {
     echo -e "${BLUE}Detected OS: $OS $VERSION${NC}"
 }
 
-# Function to check if running in a graphical environment
-has_display() {
-    # Check if DISPLAY is set and not empty
-    [ -n "$DISPLAY" ] || return 1
-    
-    # Check if running in a graphical environment
-    if command -v xdpyinfo >/dev/null 2>&1; then
-        xdpyinfo >/dev/null 2>&1 && return 0
-    fi
-    
-    # Check for Wayland
-    [ -n "$WAYLAND_DISPLAY" ] && return 0
-    
-    return 1
-}
-
 # Function to launch the Windsurf GUI application
 launch_windsurf() {
     echo -e "${BLUE}Attempting to launch Windsurf...${NC}"
-    
-    # Check if we're in a graphical environment
-    if ! has_display; then
-        echo -e "${YELLOW}No display detected. Cannot launch GUI application.${NC}"
-        echo -e "${YELLOW}You can launch Windsurf manually when in a graphical environment by running: ${NC}windsurf"
-        return 1
-    fi
     
     # Get the current user who is running sudo
     ACTUAL_USER=""
@@ -81,41 +58,68 @@ launch_windsurf() {
     fi
     
     if [ -z "$ACTUAL_USER" ]; then
-        echo -e "${YELLOW}Cannot determine the actual user. Launch Windsurf manually.${NC}"
-        return 1
-    fi
-    
-    # Try to find the .desktop file
-    DESKTOP_FILE=$(find /usr/share/applications ~/.local/share/applications -name "*windsurf*.desktop" 2>/dev/null | head -n 1)
-    
-    if [ -n "$DESKTOP_FILE" ]; then
-        # Extract the Exec line from the .desktop file
-        EXEC_CMD=$(grep "^Exec=" "$DESKTOP_FILE" | head -n 1 | sed 's/^Exec=//' | sed 's/%[a-zA-Z]//')
-        if [ -n "$EXEC_CMD" ]; then
-            echo -e "${GREEN}Launching Windsurf using desktop file...${NC}"
-            # Launch as the actual user
-            if [ "$ACTUAL_USER" != "root" ]; then
-                su - "$ACTUAL_USER" -c "nohup $EXEC_CMD >/dev/null 2>&1 &"
-            else
-                nohup $EXEC_CMD >/dev/null 2>&1 &
+        ACTUAL_USER=$(whoami)
+        if [ "$ACTUAL_USER" = "root" ]; then
+            # Try to find a non-root user
+            ACTUAL_USER=$(who | grep -v root | head -n 1 | awk '{print $1}')
+            if [ -z "$ACTUAL_USER" ]; then
+                # Default back to the sudo user if we can't find anyone else
+                ACTUAL_USER="$SUDO_USER"
             fi
-            return 0
         fi
     fi
     
-    # If desktop file not found or Exec line not found, try direct command
+    # Try multiple approaches to launch Windsurf
+    
+    # Approach 1: Use the .desktop file if available
+    if [ -n "$ACTUAL_USER" ] && [ "$ACTUAL_USER" != "root" ]; then
+        # Find desktop file
+        DESKTOP_FILE=$(find /usr/share/applications ~/.local/share/applications -name "*windsurf*.desktop" 2>/dev/null | head -n 1)
+        
+        if [ -n "$DESKTOP_FILE" ]; then
+            # Extract the Exec line from the .desktop file
+            EXEC_CMD=$(grep "^Exec=" "$DESKTOP_FILE" | head -n 1 | sed 's/^Exec=//' | sed 's/%[a-zA-Z]//')
+            if [ -n "$EXEC_CMD" ]; then
+                echo -e "${GREEN}Launching Windsurf using desktop file...${NC}"
+                # Launch as the actual user with DISPLAY environment
+                su - "$ACTUAL_USER" -c "export DISPLAY=:0; nohup $EXEC_CMD >/dev/null 2>&1 &"
+                sleep 1
+                echo -e "${GREEN}Launch command sent. Windsurf should start momentarily.${NC}"
+                return 0
+            fi
+        fi
+    fi
+    
+    # Approach 2: Direct command
     if command -v windsurf >/dev/null 2>&1; then
         echo -e "${GREEN}Launching Windsurf directly...${NC}"
-        # Launch as the actual user
-        if [ "$ACTUAL_USER" != "root" ]; then
-            su - "$ACTUAL_USER" -c "nohup windsurf >/dev/null 2>&1 &"
+        
+        # Try to launch for non-root user
+        if [ -n "$ACTUAL_USER" ] && [ "$ACTUAL_USER" != "root" ]; then
+            # Try various DISPLAY settings
+            su - "$ACTUAL_USER" -c "export DISPLAY=:0; nohup windsurf >/dev/null 2>&1 &"
+            sleep 1
+            
+            # Also try with Wayland support
+            su - "$ACTUAL_USER" -c "export DISPLAY=:0; export WAYLAND_DISPLAY=wayland-0; nohup windsurf >/dev/null 2>&1 &"
+            sleep 1
+            
+            # For systems where the first user's display might be :1
+            su - "$ACTUAL_USER" -c "export DISPLAY=:1; nohup windsurf >/dev/null 2>&1 &"
+            sleep 1
         else
+            # If we couldn't determine a non-root user, try with root
+            export DISPLAY=:0
             nohup windsurf >/dev/null 2>&1 &
+            sleep 1
         fi
+        
+        echo -e "${GREEN}Launch command sent. Windsurf should start momentarily if a display is available.${NC}"
+        echo -e "${YELLOW}If Windsurf doesn't appear, you can launch it manually by typing 'windsurf' in a terminal.${NC}"
         return 0
     fi
     
-    echo -e "${YELLOW}Could not find Windsurf executable. Please launch it manually.${NC}"
+    echo -e "${YELLOW}Could not find Windsurf executable. You can launch it manually by running: windsurf${NC}"
     return 1
 }
 
