@@ -691,9 +691,15 @@ EOF
     fi
 }
 
-# Function to launch the Windsurf GUI application - simplified to just run the command
+# Function to launch the Windsurf GUI application with proper arguments
 launch_windsurf() {
-    windsurf
+    # Check if running as root/sudo
+    if [ "$(id -u)" -eq 0 ]; then
+        echo -e "${YELLOW}Running as root/sudo - adding required arguments${NC}"
+        windsurf --no-sandbox --user-data-dir=/tmp/windsurf-root
+    else
+        windsurf
+    fi
 }
 
 # Function to install on Debian-based systems (Ubuntu, Debian, etc.)
