@@ -693,34 +693,7 @@ EOF
 
 # Function to launch the Windsurf GUI application - simplified to just run the command
 launch_windsurf() {
-    echo -e "${BLUE}Launching Windsurf...${NC}"
-    
-    # Get the current user who is running sudo
-    ACTUAL_USER=""
-    if [ -n "$SUDO_USER" ]; then
-        ACTUAL_USER="$SUDO_USER"
-    elif [ -n "$LOGNAME" ]; then
-        ACTUAL_USER="$LOGNAME"
-    else
-        ACTUAL_USER=$(who | grep -v root | head -n 1 | awk '{print $1}')
-        if [ -z "$ACTUAL_USER" ]; then
-            ACTUAL_USER=$(whoami)
-        fi
-    fi
-    
-    # If we found a non-root user, run as that user
-    if [ -n "$ACTUAL_USER" ] && [ "$ACTUAL_USER" != "root" ]; then
-        echo -e "${GREEN}Running Windsurf as user: $ACTUAL_USER${NC}"
-        # Simply run the windsurf command as the user
-        su - "$ACTUAL_USER" -c "windsurf &" &
-    else
-        # Just run windsurf directly
-        echo -e "${GREEN}Running Windsurf directly${NC}"
-        windsurf &
-    fi
-    
-    echo -e "${GREEN}Windsurf launch command sent. The application should open shortly.${NC}"
-    echo -e "${YELLOW}If Windsurf doesn't appear, you can always launch it manually by typing 'windsurf' in a terminal.${NC}"
+    windsurf
 }
 
 # Function to install on Debian-based systems (Ubuntu, Debian, etc.)
