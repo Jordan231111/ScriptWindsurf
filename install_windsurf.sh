@@ -199,7 +199,7 @@ register_windsurf() {
     # Install required Python packages for browser automation
     echo -e "${BLUE}Installing required Python packages for browser automation...${NC}"
     # Use the pip from the virtual environment
-    "$VENV_DIR/bin/pip" install selenium webdriver-manager requests faker
+    "$VENV_DIR/bin/pip" install selenium webdriver-manager requests faker python-dotenv
     
     # Check if Chrome or Firefox is installed
     BROWSER=""
@@ -309,10 +309,16 @@ def setup_driver(browser_type):
                     # First try: Use a unique user data directory
                     unique_user_dir = tempfile.mkdtemp()
                     options.add_argument(f"--user-data-dir={unique_user_dir}")
+                    # Explicitly terminate any existing Chrome processes
+                    os.system("pkill -f chrome || true")
+                    time.sleep(2)  # Give time for processes to terminate
                     print(f"Using unique user data dir: {unique_user_dir}")
                 elif retry_count == 1:
                     # Second try: No custom user data directory
                     print("Trying without custom user-data-dir")
+                    # Try again with a completely random profile name
+                    profile_dir = tempfile.mkdtemp()
+                    options.add_argument(f"--profile-directory=WindsurfTemp{secrets.token_hex(8)}")
                     # No user-data-dir setting
                 else:
                     # Last try: Force temporary directory and use --remote-debugging-port
@@ -323,6 +329,12 @@ def setup_driver(browser_type):
                 
                 options.add_experimental_option("excludeSwitches", ["enable-automation"])
                 options.add_experimental_option("useAutomationExtension", False)
+                
+                # Add additional options to prevent profile conflicts
+                options.add_argument("--disable-infobars")
+                options.add_argument("--disable-notifications")
+                options.add_argument("--disable-default-apps")
+                options.add_argument("--password-store=basic")
                 
                 service = Service(ChromeDriverManager().install())
                 driver = webdriver.Chrome(service=service, options=options)
@@ -437,9 +449,26 @@ def save_credentials(user_info, email):
     
     return credentials
 
+def force_kill_chrome_processes():
+    """Forcefully terminate all Chrome processes"""
+    print("Forcefully terminating any existing Chrome processes...")
+    if sys.platform.startswith('linux'):
+        os.system("pkill -9 -f chrome || true")
+        os.system("pkill -9 -f chromium || true")
+    elif sys.platform == 'darwin':
+        os.system("pkill -9 -f 'Google Chrome' || true")
+    elif sys.platform == 'win32':
+        os.system("taskkill /F /IM chrome.exe /T > nul 2>&1")
+    
+    # Small delay to ensure processes are terminated
+    time.sleep(2)
+
 def register_windsurf(email, webdriver_type="chrome"):
     """Register a new Windsurf account using browser automation"""
-    print("Starting browser automation to register Windsurf...")
+    print(f"{BLUE}Starting browser automation to register Windsurf...{NC}")
+    
+    # Kill any existing Chrome processes before starting
+    force_kill_chrome_processes()
     
     user_info = generate_user_info()
     driver = None
